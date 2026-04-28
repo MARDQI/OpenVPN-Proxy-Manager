@@ -77,13 +77,17 @@ class ProfileManager:
         if not profile_data.get("name"):
             errors.append("El nombre del perfil no puede estar vacío.")
 
-        config_path = profile_data.get("config_path", "").strip()
-        if not config_path:
-            errors.append("Debes seleccionar una configuración OpenVPN (.ovpn) para este perfil.")
-        elif not os.path.exists(config_path):
-            errors.append("El archivo .ovpn no existe: " + config_path)
+        config_path = profile_data.get("config_path")
+        if not config_path or not config_path.endswith(".ovpn") or not os.path.exists(config_path):
+            errors.append("La ruta de configuración debe ser un archivo .ovpn válido y existente.")
 
         if not profile_data.get("vpn_username"):
             errors.append("El usuario de VPN no puede estar vacío.")
+
+        if profile_data.get("use_proxy"):
+            if not profile_data.get("proxy_host"):
+                errors.append("El host del proxy no puede estar vacío cuando el proxy está habilitado.")
+            if not profile_data.get("proxy_username"):
+                errors.append("El usuario del proxy no puede estar vacío cuando el proxy está habilitado.")
 
         return errors

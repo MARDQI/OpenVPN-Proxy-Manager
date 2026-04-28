@@ -1,4 +1,6 @@
 import os
+import stat
+import tempfile
 import subprocess
 import re
 from PyQt6.QtCore import QObject, pyqtSignal, QProcess
@@ -18,10 +20,27 @@ class VPNRunner(QObject):
         self.process.errorOccurred.connect(self._handle_error)
         
         self.vpn_creds_path = None
+        self.proxy_creds_path = None
+        self.up_script_path = None
+        self.down_script_path = None
         self._original_gateway = "192.168.1.1"
         self._original_dns = "8.8.8.8"
 
         self._state = "Disconnected"
+
+    def _get_default_gateway(self) -> str:
+        """Parsea 'ip route' y retorna el gateway actual antes de conectar."""
+        try:
+            result = subprocess.run(["ip", "route"], capture_output=True, text=True)
+            for line in result.stdout.splitlines():
+                if line.startswith("default"):
+                    parts = line.split()
+                    if "via" in parts:
+                        via_idx = parts.index("via")
+                        return parts[via_idx + 1]
+        except Exception as e:
+            self.log_updated.emit(f"Error detectando gateway: {e}")
+        return "192.168.1.1"  # fallback real
 
     def _get_current_dns(self) -> str:
         """Lee el DNS actual desde /etc/resolv.conf antes de conectar."""
@@ -37,87 +56,98 @@ class VPNRunner(QObject):
             pass
         return self._original_gateway  # fallback al gateway si no encuentra DNS
 
+    def _check_openssl_legacy(self):
+        """Verifica que el provider legacy de OpenSSL esté activo."""
+        try:
+            with open('/etc/ssl/openssl.cnf', 'r') as f:
+                content = f.read()
+                if '[legacy_sect]' in content:
+                    section = content.split('[legacy_sect]')[1].split('[')[0]
+                    if 'activate = 1' not in section and 'activate=1' not in section:
+                        self.log_updated.emit("ADVERTENCIA: proxy NTLM requiere OpenSSL legacy provider activo. Ver /etc/ssl/openssl.cnf sección [legacy_sect]")
+                else:
+                    self.log_updated.emit("ADVERTENCIA: proxy NTLM requiere OpenSSL legacy provider activo. Ver /etc/ssl/openssl.cnf sección [legacy_sect]")
+        except Exception as e:
+            self.log_updated.emit(f"ADVERTENCIA: No se pudo verificar /etc/ssl/openssl.cnf: {e}")
+
     def set_state(self, new_state: str):
         if self._state != new_state:
             self._state = new_state
             self.state_changed.emit(self._state)
 
-    def _generate_script(self, profile: dict) -> str:
-        from pathlib import Path
-        import stat as stat_mod
-        import tempfile
-
-        config_dir = Path.home() / ".config" / "proxyvpn-manager"
-        config_dir.mkdir(parents=True, exist_ok=True)
-
-        script_path = config_dir / "connect.sh"
-        proxy_creds_path = config_dir / "proxy.txt"
-
-        dns_ip = profile.get("vpn_dns", "").strip() or "10.98.0.1"
-
-        # Archivo temporal de credenciales VPN
-        fd, vpn_creds_path = tempfile.mkstemp(prefix="pvpn_vpn_")
-        os.chmod(vpn_creds_path, 0o600)
+    def _write_secure_temp_file(self, content: str) -> str:
+        fd, path = tempfile.mkstemp(prefix="pvpn_", text=True)
+        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR) # 600
         with os.fdopen(fd, 'w') as f:
-            f.write(profile.get("vpn_username", "") + "\n")
-            f.write(profile.get("vpn_password", "") + "\n")
-        self.vpn_creds_path = vpn_creds_path
-
-        lines = [
-            "#!/bin/bash",
-            'echo "[*] Conectando: ' + profile.get("name", "") + '"',
-            "sudo openvpn \\",
-            '  --config "' + profile.get("config_path", "") + '" \\',
-            "  --auth-user-pass " + vpn_creds_path + " \\",
-            "  --script-security 2 \\",
-            "  --up-restart \\",
-            "  --setenv OPENSSL_CONF /etc/ssl/openssl.cnf \\",
-            "  --up \"/bin/sh -c 'echo nameserver " + dns_ip + " > /etc/resolv.conf'\" \\",
-            "  --down \"/bin/sh -c 'echo nameserver " + self._original_dns + " > /etc/resolv.conf'\"",
-        ]
-
-        if profile.get("use_proxy", False):
-            # Escribir credenciales proxy en archivo separado
-            with open(proxy_creds_path, "w") as f:
-                f.write(profile.get("proxy_username", "") + "\n")
-                f.write(profile.get("proxy_password", "") + "\n")
-            os.chmod(proxy_creds_path, 0o600)
-
-            proxy_host = profile.get("proxy_host", "10.0.0.1")
-            proxy_port = str(profile.get("proxy_port", 8080))
-            proxy_auth = profile.get("proxy_auth", "ntlm")
-
-            lines[-1] += " \\"
-            lines.append(
-                "  --http-proxy " + proxy_host + " " + proxy_port +
-                " " + str(proxy_creds_path) + " " + proxy_auth
-            )
-
-        try:
-            with open(script_path, "w") as f:
-                f.write("\n".join(lines) + "\n")
-            os.chmod(script_path, 0o700)
-            self.log_updated.emit("Script listo: " + str(script_path))
-            return str(script_path)
-        except Exception as e:
-            self.log_updated.emit("ERROR generando script: " + str(e))
-            return ""
+            f.write(content)
+        return path
 
     def connect_vpn(self, profile: dict):
         if self.process.state() != QProcess.ProcessState.NotRunning:
-            self.log_updated.emit("Error: VPN already running.")
-            return
-
-        self._original_dns = self._get_current_dns()
-        
-        script = self._generate_script(profile)
-        if not script:
-            self.set_state("Error")
+            self.log_updated.emit("Error: VPN is already running.")
             return
 
         self.set_state("Connecting")
-        self.log_updated.emit("Ejecutando script: " + script)
-        self.process.start("bash", [script])
+        self.log_updated.emit("Starting VPN connection process...")
+
+        self._original_gateway = self._get_default_gateway()
+        self._original_dns = self._get_current_dns()
+        
+        self.log_updated.emit(f"Detected fallback gateway: {self._original_gateway} / DNS: {self._original_dns}")
+
+        # Create temporary credential files
+        vpn_creds = profile.get('vpn_username', '') + "\n" + profile.get('vpn_password', '') + "\n"
+        self.vpn_creds_path = self._write_secure_temp_file(vpn_creds)
+        
+        args = [
+            "openvpn",
+            "--config", profile.get("config_path", ""),
+            "--auth-user-pass", self.vpn_creds_path,
+            "--script-security", "2",
+            "--setenv", "OPENSSL_CONF", "/etc/ssl/openssl.cnf",
+        ]
+
+        # DNS scripts
+        dns_ip = profile.get("vpn_dns", "").strip()
+        if not dns_ip:
+            self.log_updated.emit(
+                "ADVERTENCIA: DNS VPN no configurado. "
+                "Usando 10.98.0.1 por defecto. "
+                "Edita el perfil para configurarlo manualmente."
+            )
+            dns_ip = "10.98.0.1"
+
+        # Crear scripts temporales para up/down
+        up_script_content = "#!/bin/sh\necho nameserver " + dns_ip + " > /etc/resolv.conf\n"
+        down_script_content = "#!/bin/sh\necho nameserver " + self._original_dns + " > /etc/resolv.conf\n"
+        
+        self.up_script_path = self._write_secure_temp_file(up_script_content)
+        self.down_script_path = self._write_secure_temp_file(down_script_content)
+        
+        # Hacer los scripts ejecutables
+        os.chmod(self.up_script_path, 0o755)
+        os.chmod(self.down_script_path, 0o755)
+        
+        args.extend([
+            "--up-restart",
+            "--up", self.up_script_path,
+            "--down", self.down_script_path
+        ])
+
+        # Proxy settings
+        if profile.get("use_proxy", False):
+            proxy_auth = profile.get("proxy_auth", "ntlm")
+            if proxy_auth == "ntlm":
+                self._check_openssl_legacy()
+                
+            proxy_creds = profile.get('proxy_username', '') + "\n" + profile.get('proxy_password', '') + "\n"
+            self.proxy_creds_path = self._write_secure_temp_file(proxy_creds)
+            args.extend([
+                "--http-proxy", profile.get("proxy_host", "10.0.0.1"), str(profile.get("proxy_port", "8080")), self.proxy_creds_path, proxy_auth
+            ])
+
+        self.log_updated.emit(f"Running: sudo {' '.join(args)}")
+        self.process.start("sudo", args)
 
     def disconnect_vpn(self):
         if self.process.state() != QProcess.ProcessState.NotRunning:
@@ -125,23 +155,25 @@ class VPNRunner(QObject):
             os.system("sudo killall -SIGTERM openvpn")
             self.process.waitForFinished(5000)
             if self.process.state() != QProcess.ProcessState.NotRunning:
+                self.log_updated.emit("Force killing openvpn...")
                 os.system("sudo killall -SIGKILL openvpn")
                 self.process.kill()
-        self._cleanup()
-        # Restaurar DNS
-        try:
-            with open('/etc/resolv.conf', 'w') as f:
-                f.write("nameserver " + self._original_dns + "\n")
-        except Exception:
-            pass
+
+        self._cleanup_temp_files()
         self.set_state("Disconnected")
 
-    def _cleanup(self):
-        for path in [self.vpn_creds_path]:
+    def _cleanup_temp_files(self):
+        for path in [self.vpn_creds_path, self.proxy_creds_path,
+                     self.up_script_path, self.down_script_path]:
             if path and os.path.exists(path):
-                try: os.remove(path)
-                except: pass
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         self.vpn_creds_path = None
+        self.proxy_creds_path = None
+        self.up_script_path = None
+        self.down_script_path = None
 
     def _handle_stdout(self):
         data = self.process.readAllStandardOutput().data().decode(errors='replace')
@@ -189,7 +221,7 @@ class VPNRunner(QObject):
             self.log_updated.emit(f"STDERR: {line}")
 
     def _handle_finished(self, exitCode, exitStatus):
-        self._cleanup()
+        self._cleanup_temp_files()
         if exitStatus == QProcess.ExitStatus.CrashExit:
             self.log_updated.emit("VPN Process crashed.")
             self.set_state("Error")
@@ -199,5 +231,5 @@ class VPNRunner(QObject):
 
     def _handle_error(self, err):
         self.log_updated.emit(f"Process error: {err}")
-        self._cleanup()
+        self._cleanup_temp_files()
         self.set_state("Error")
