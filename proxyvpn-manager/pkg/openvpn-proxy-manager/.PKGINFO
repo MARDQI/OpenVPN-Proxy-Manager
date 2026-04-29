@@ -3,12 +3,12 @@
 pkgname = openvpn-proxy-manager
 pkgbase = openvpn-proxy-manager
 xdata = pkgtype=pkg
-pkgver = 1.0.0-1
+pkgver = 1.0.0-2
 pkgdesc = Gestor de conexiones OpenVPN con soporte de proxy institucional NTLM
 url = 
-builddate = 1777340984
+builddate = 1777439116
 packager = Unknown Packager
-size = 117641
+size = 151041
 arch = any
 license = MIT
 depend = python

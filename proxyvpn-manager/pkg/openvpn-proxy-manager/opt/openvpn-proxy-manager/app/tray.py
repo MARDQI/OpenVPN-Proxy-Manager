@@ -14,6 +14,7 @@ class SystemTray(QSystemTrayIcon):
         
         self.menu = QMenu()
         self.setContextMenu(self.menu)
+        self.menu.aboutToShow.connect(self._update_visibility_action)
         
         self.activated.connect(self._on_activated)
         self.refresh_profiles({})
@@ -33,12 +34,22 @@ class SystemTray(QSystemTrayIcon):
 
     def _on_activated(self, reason):
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            if self.main_window.isVisible():
-                self.main_window.hide()
+            self._toggle_window()
+
+    def _update_visibility_action(self):
+        if hasattr(self, '_toggle_action'):
+            if self.main_window.isVisible() and not self.main_window.isMinimized():
+                self._toggle_action.setText("Ocultar")
             else:
-                self.main_window.show()
-                self.main_window.raise_()
-                self.main_window.activateWindow()
+                self._toggle_action.setText("Mostrar")
+
+    def _toggle_window(self):
+        if self.main_window.isVisible() and not self.main_window.isMinimized():
+            self.main_window.hide()
+        else:
+            self.main_window.showNormal()
+            self.main_window.raise_()
+            self.main_window.activateWindow()
 
     def update_state(self, state: str):
         if state == "Connected":
@@ -69,9 +80,9 @@ class SystemTray(QSystemTrayIcon):
             
         self.menu.addSeparator()
         
-        show_action = QAction("Mostrar ventana", self.menu)
-        show_action.triggered.connect(self._show_window)
-        self.menu.addAction(show_action)
+        self._toggle_action = QAction("Mostrar", self.menu)
+        self._toggle_action.triggered.connect(self._toggle_window)
+        self.menu.addAction(self._toggle_action)
         
         exit_action = QAction("Salir", self.menu)
         exit_action.triggered.connect(self._exit_app)
@@ -88,7 +99,7 @@ class SystemTray(QSystemTrayIcon):
                 break
 
     def _show_window(self):
-        self.main_window.show()
+        self.main_window.showNormal()
         self.main_window.raise_()
         self.main_window.activateWindow()
 

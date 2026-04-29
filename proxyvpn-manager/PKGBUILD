@@ -1,6 +1,6 @@
 pkgname=openvpn-proxy-manager
 pkgver=1.0.0
-pkgrel=1
+pkgrel=2
 pkgdesc="Gestor de conexiones OpenVPN con soporte de proxy institucional NTLM"
 arch=('any')
 license=('MIT')
