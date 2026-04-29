@@ -1,0 +1,2 @@
+#!/bin/bash
+cd /opt/openvpn-proxy-manager && python main.py "\$@"

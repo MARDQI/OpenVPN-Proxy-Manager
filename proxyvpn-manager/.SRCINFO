@@ -1,0 +1,13 @@
+pkgbase = openvpn-proxy-manager
+	pkgdesc = Gestor de conexiones OpenVPN con soporte de proxy institucional NTLM
+	pkgver = 1.0.0
+	pkgrel = 1
+	install = openvpn-proxy-manager.install
+	arch = any
+	license = MIT
+	depends = python
+	depends = python-pyqt6
+	depends = python-cryptography
+	depends = openvpn
+
+pkgname = openvpn-proxy-manager

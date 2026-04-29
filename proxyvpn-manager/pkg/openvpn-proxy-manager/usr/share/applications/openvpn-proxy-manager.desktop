@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=OpenVPN Proxy Manager
+Comment=Gestiona conexiones OpenVPN con proxy institucional NTLM
+Exec=openvpn-proxy-manager
+Icon=openvpn-proxy-manager
+Terminal=false
+Type=Application
+Categories=Network;VPN;Security;
+Keywords=vpn;proxy;openvpn;protonvpn;ntlm;
+StartupNotify=false

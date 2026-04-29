@@ -1,0 +1,54 @@
+pkgname=openvpn-proxy-manager
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Gestor de conexiones OpenVPN con soporte de proxy institucional NTLM"
+arch=('any')
+license=('MIT')
+depends=('python' 'python-pyqt6' 'python-cryptography' 'openvpn')
+install="${pkgname}.install"
+source=()
+sha256sums=()
+
+package() {
+    # 1. Instalar archivos del proyecto en /opt/openvpn-proxy-manager/
+    install -dm755 "$pkgdir/opt/openvpn-proxy-manager"
+    cp -r "$startdir/app" "$pkgdir/opt/openvpn-proxy-manager/"
+    cp "$startdir/main.py" "$pkgdir/opt/openvpn-proxy-manager/"
+    
+    install -dm755 "$pkgdir/opt/openvpn-proxy-manager/assets"
+    cp -r "$startdir/assets/"* "$pkgdir/opt/openvpn-proxy-manager/assets/" 2>/dev/null || true
+
+    # 2. Crear lanzador en /usr/local/bin/openvpn-proxy-manager
+    install -dm755 "$pkgdir/usr/local/bin"
+    cat > "$pkgdir/usr/local/bin/openvpn-proxy-manager" << 'LAUNCHER'
+#!/bin/bash
+cd /opt/openvpn-proxy-manager && python main.py "\$@"
+LAUNCHER
+    chmod +x "$pkgdir/usr/local/bin/openvpn-proxy-manager"
+
+    # 3. Instalar ícono
+    install -Dm644 "$startdir/assets/icon.png" \
+        "$pkgdir/usr/share/pixmaps/openvpn-proxy-manager.png"
+
+    # 4. Instalar .desktop
+    install -Dm644 /dev/stdin \
+        "$pkgdir/usr/share/applications/openvpn-proxy-manager.desktop" << 'DESKTOP'
+[Desktop Entry]
+Name=OpenVPN Proxy Manager
+Comment=Gestiona conexiones OpenVPN con proxy institucional NTLM
+Exec=openvpn-proxy-manager
+Icon=openvpn-proxy-manager
+Terminal=false
+Type=Application
+Categories=Network;VPN;Security;
+Keywords=vpn;proxy;openvpn;protonvpn;ntlm;
+StartupNotify=false
+DESKTOP
+
+    # 5. Configurar sudoers
+    install -dm750 "$pkgdir/etc/sudoers.d"
+    cat > "$pkgdir/etc/sudoers.d/openvpn-proxy-manager" << 'SUDOERS'
+%wheel ALL=(ALL) NOPASSWD: /usr/bin/openvpn, /usr/bin/killall
+SUDOERS
+    chmod 440 "$pkgdir/etc/sudoers.d/openvpn-proxy-manager"
+}
